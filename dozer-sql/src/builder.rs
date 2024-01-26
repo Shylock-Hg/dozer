@@ -1,14 +1,18 @@
 use crate::aggregation::factory::AggregationProcessorFactory;
 use crate::builder::PipelineError::InvalidQuery;
 use crate::errors::PipelineError;
+use crate::pipeline_builder::join_builder::insert_join_to_pipeline;
 use crate::selection::factory::SelectionProcessorFactory;
 use dozer_core::app::AppPipeline;
 use dozer_core::app::PipelineEntryPoint;
 use dozer_core::node::PortHandle;
 use dozer_core::DEFAULT_PORT_HANDLE;
 use dozer_sql_expression::builder::{ExpressionBuilder, NameOrAlias};
+use dozer_sql_expression::sqlparser::ast::JoinConstraint;
+use dozer_sql_expression::sqlparser::ast::SelectItem;
 use dozer_sql_expression::sqlparser::ast::{
-    Join, SetOperator, SetQuantifier, TableFactor, TableWithJoins,
+    BinaryOperator, Expr, Ident, Join, SetOperator, SetQuantifier, TableFactor, TableWithJoins,
+    JoinOperator
 };
 use dozer_types::models::udf_config::UdfConfig;
 
@@ -243,6 +247,29 @@ fn query_to_pipeline(
     Ok(())
 }
 
+fn get_column_name(query: &Query) -> Result<String, PipelineError> {
+    if let SetExpr::Select(select) = &*query.body {
+        let projection = &select.projection;
+        if projection.len() != 1 {
+            return Err(PipelineError::UnsupportedSqlError(
+                UnsupportedSqlError::MoreThanOneColumnError,
+            ));
+        }
+        match &projection[0] {
+            SelectItem::UnnamedExpr(expr) => return Ok(format!("{}", expr)),
+            SelectItem::ExprWithAlias { alias, .. } => return Ok(alias.value.clone()),
+            _ => {
+                return Err(PipelineError::UnsupportedSqlError(
+                    UnsupportedSqlError::OnlyExprColumnError,
+                ))
+            }
+        }
+    }
+    return Err(PipelineError::UnsupportedSqlError(
+        UnsupportedSqlError::SelectOnlyError,
+    ));
+}
+
 fn select_to_pipeline(
     table_info: &TableInfo,
     select: Select,
@@ -312,27 +339,48 @@ fn select_to_pipeline(
 
     // Where clause
     if let Some(selection) = select.selection {
-        let selection = SelectionProcessorFactory::new(
-            gen_selection_name.to_owned(),
-            selection,
-            query_ctx.udfs.clone(),
-        );
+        if let Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } = selection
+        {
+            let colum_name_of_subquery = get_column_name(&subquery)?;
+            let sel_expr = Expr::BinaryOp {
+                left: expr,
+                op: if negated {
+                    BinaryOperator::NotEq
+                } else {
+                    BinaryOperator::Eq
+                },
+                right: Box::new(Expr::Identifier(Ident::new(colum_name_of_subquery))),
+            };
+            let join = Join{relation: TableFactor::Derived { lateral: false, subquery: subquery.clone(), alias: None }, join_operator: JoinOperator::Inner(JoinConstraint::On(sel_expr)) };
+            let table_with_joins = TableWithJoins {relation: TableFactor::Table { name: table_info.name.clone(), alias: None, args: None, with_hints: vec![] }, joins: vec![join]};
+            insert_join_to_pipeline(from, pipeline, pipeline_idx, query_ctx);
+        } else {
+            let selection = SelectionProcessorFactory::new(
+                gen_selection_name.to_owned(),
+                selection,
+                query_ctx.udfs.clone(),
+            );
 
-        pipeline.add_processor(Box::new(selection), &gen_selection_name, vec![]);
+            pipeline.add_processor(Box::new(selection), &gen_selection_name, vec![]);
 
-        pipeline.connect_nodes(
-            &gen_product_name,
-            product_output_port,
-            &gen_selection_name,
-            DEFAULT_PORT_HANDLE,
-        );
+            pipeline.connect_nodes(
+                &gen_product_name,
+                product_output_port,
+                &gen_selection_name,
+                DEFAULT_PORT_HANDLE,
+            );
 
-        pipeline.connect_nodes(
-            &gen_selection_name,
-            DEFAULT_PORT_HANDLE,
-            &gen_agg_name,
-            DEFAULT_PORT_HANDLE,
-        );
+            pipeline.connect_nodes(
+                &gen_selection_name,
+                DEFAULT_PORT_HANDLE,
+                &gen_agg_name,
+                DEFAULT_PORT_HANDLE,
+            );
+        };
     } else {
         pipeline.connect_nodes(
             &gen_product_name,

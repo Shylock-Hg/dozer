@@ -149,6 +149,12 @@ pub enum UnsupportedSqlError {
 
     #[error("Unsupported SQL statement {0}")]
     GenericError(String),
+
+    #[error("Only one select column is supported.")]
+    MoreThanOneColumnError,
+
+    #[error("Only column with expr.")]
+    OnlyExprColumnError,
 }
 
 #[derive(Error, Debug)]

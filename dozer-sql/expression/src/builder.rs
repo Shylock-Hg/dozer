@@ -29,6 +29,7 @@ pub struct ExpressionBuilder {
     // Must be an aggregation function
     pub aggregations: Vec<Expression>,
     pub offset: usize,
+    // sub query pipeline
 }
 
 impl ExpressionBuilder {
@@ -121,6 +122,8 @@ impl ExpressionBuilder {
                 schema,
                 udfs,
             ),
+
+            SqlExpr::InSubquery { .. } => unreachable!(),
 
             SqlExpr::Cast { expr, data_type } => {
                 self.parse_sql_cast_operator(parse_aggregations, expr, data_type, schema, udfs)

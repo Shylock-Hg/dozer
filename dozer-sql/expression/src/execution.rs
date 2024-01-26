@@ -71,6 +71,7 @@ pub enum Expression {
         list: Vec<Expression>,
         negated: bool,
     },
+    InSubquery,
     Now {
         fun: DateTimeFunctionType,
     },
@@ -248,6 +249,7 @@ impl Expression {
                         .as_str()
                     + ")"
             }
+            Expression::InSubquery => "Subquery".to_string(),
             Expression::GeoFunction { fun, args } => {
                 fun.to_string()
                     + "("
@@ -349,6 +351,7 @@ impl Expression {
                 list,
                 negated,
             } => evaluate_in_list(schema, expr, list, *negated, record),
+            Expression::InSubquery => unreachable!(),
             Expression::Cast { arg, typ } => typ.evaluate(schema, arg, record),
             Expression::GeoFunction { fun, args } => fun.evaluate(schema, args, record),
             Expression::ConditionalExpression { fun, args } => fun.evaluate(schema, args, record),
@@ -423,6 +426,7 @@ impl Expression {
                 SourceDefinition::Dynamic,
                 false,
             )),
+            Expression::InSubquery => unreachable!(),
             Expression::Cast { arg, typ } => typ.get_return_type(schema, arg),
             Expression::GeoFunction { fun, args } => get_geo_function_type(fun, args, schema),
             Expression::DateTimeFunction { fun, arg } => {
